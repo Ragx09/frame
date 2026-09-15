@@ -1,0 +1,208 @@
+/* FRAME — dark terminal / CRT theme.
+   Palette, typography and primitives per build/THEME.md. */
+
+:root {
+  --bg:        #05070a;
+  --bg-panel:  #080c11;
+  --bg-raised: #0d141c;
+  --grid:      #101820;
+  --line:      #16222e;
+  --fg:        #b9d4c8;
+  --fg-dim:    #5c7488;
+  --fg-bright: #e6fff4;
+
+  --accent:    #00ff9c;
+  --accent-2:  #00e5ff;
+  --warn:      #ffb000;
+  --error:     #ff2e5b;
+  --magenta:   #ff45d0;
+
+  --hover:     #12202c;
+  --selected:  #14273a;
+  --hover-bd:  #2a4055;
+  --ink:       #04120c;
+  --placeholder: #3d5163;
+
+  --c1: #0a8fd1; --c2: #e94101; --c3: #0c9f5f;
+  --c4: #975afe; --c5: #ea02a1; --c-more: #7f93a3;
+
+  --mono: "JetBrains Mono", "Cascadia Mono", "Fira Code", Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------- CRT overlay --------------------------- */
+.scanlines {
+  position: fixed; inset: 0; pointer-events: none; z-index: 9000;
+  background:
+    repeating-linear-gradient(to bottom,
+      rgba(0,255,156,.03) 0px, rgba(0,255,156,.03) 1px,
+      transparent 1px, transparent 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%);
+}
+
+/* ---------------------------- typography ---------------------------- */
+h1, h2, h3, h4 { margin: 0; font-weight: 500; }
+
+.heading {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px;
+  color: var(--accent); text-shadow: 0 0 8px rgba(0,255,156,.35);
+  display: flex; align-items: center; gap: 8px;
+}
+.heading::before { content: ">"; opacity: .8; }
+.heading .pill { margin-left: auto; }
+
+.dim   { color: var(--fg-dim); }
+.bright{ color: var(--fg-bright); }
+.tiny  { font-size: 10.5px; }
+.label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
+  color: var(--fg-dim);
+}
+
+/* ------------------------------ surfaces ---------------------------- */
+.block {
+  background: var(--bg-panel);
+  padding: 11px 12px 13px;
+  min-height: 0;
+}
+.block.grow { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.col  { display: flex; flex-direction: column; background: var(--line); gap: 1px; min-height: 0; }
+.rowx { display: flex; background: var(--line); gap: 1px; min-height: 0; flex: 1; }
+
+.scroll { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1; }
+
+/* ------------------------------ controls ---------------------------- */
+input, textarea, select, button {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  border-radius: 2px;
+}
+input, textarea, select {
+  width: 100%;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  color: var(--fg-bright);
+  padding: 6px 8px;
+  outline: none;
+  transition: border-color .12s;
+}
+textarea { resize: vertical; line-height: 1.6; }
+input::placeholder, textarea::placeholder { color: var(--placeholder); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0,255,156,.25), 0 0 14px rgba(0,255,156,.15);
+}
+select { appearance: none; cursor: pointer; padding-right: 22px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
+                    linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 12px, calc(100% - 8px) 12px;
+  background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+
+button {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all .12s;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { color: var(--fg-bright); border-color: var(--hover-bd); }
+button:disabled { opacity: .4; cursor: default; }
+button.primary {
+  background: var(--accent); color: var(--ink); border-color: var(--accent);
+  font-weight: 700;
+}
+button.primary:hover:not(:disabled) { color: var(--ink); box-shadow: 0 0 14px rgba(0,255,156,.3); }
+button.ghost { background: transparent; }
+button.danger:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
+
+.segbar { display: flex; gap: 5px; flex-wrap: wrap; }
+.segbar button { flex: 1; }
+.segbar.auto button { flex: none; }
+
+/* ------------------------------- pills ------------------------------ */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--bg-raised); border: 1px solid var(--line);
+  color: var(--fg-dim); padding: 1px 6px; font-size: 10px;
+  border-radius: 2px; letter-spacing: .6px; text-transform: uppercase;
+}
+.vtag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .6px;
+  background: var(--bg-raised); border: 1px solid var(--vc, var(--fg-dim));
+  color: var(--vc, var(--fg-dim)); padding: 1px 6px; border-radius: 2px;
+}
+.dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--vc, var(--fg-dim)); box-shadow: 0 0 7px var(--vc, var(--fg-dim));
+}
+
+.v-draft     { --vc: var(--fg-dim); }
+.v-ready     { --vc: var(--accent-2); }
+.v-generating{ --vc: var(--warn); }
+.v-selected  { --vc: var(--accent); }
+.v-error     { --vc: var(--error); }
+.v-warn      { --vc: var(--warn); }
+.v-info      { --vc: var(--fg-dim); }
+.v-locked    { --vc: var(--warn); }
+
+/* ------------------------------ list rows --------------------------- */
+.glist { list-style: none; margin: 0; padding: 0; }
+.glist li {
+  border-left: 2px solid var(--vc, var(--fg-dim));
+  background: var(--bg-raised);
+  padding: 5px 8px; margin-bottom: 3px;
+  font-size: 11.5px; line-height: 1.4; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  transition: background .12s;
+}
+.glist li:hover { background: var(--hover); }
+.glist li.sel { background: var(--selected); border-left-color: var(--accent); }
+.glist .nm { flex: 1; color: var(--fg-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glist .meta { color: var(--fg-dim); font-size: 10.5px; }
+
+.empty {
+  text-align: center; color: var(--fg-dim); font-size: 11px;
+  padding: 24px 12px; line-height: 1.7;
+}
+
+/* ----------------------------- scrollbars --------------------------- */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--bg-panel); }
+::-webkit-scrollbar-thumb { background: #1c2c3a; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--hover-bd); }
+
+/* ------------------------------- motion ----------------------------- */
+@keyframes blink { 50% { opacity: 0; } }
+.cursor { animation: blink 1.05s steps(1) infinite; color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; }
+}
+
+/* A locked field reads as stone, not as an error. */
+input:disabled, textarea:disabled, select:disabled {
+  background: #070b0f;
+  border-color: #121b24;
+  color: var(--fg-dim);
+  cursor: default;
+}
+.field:has(:disabled) > .label { color: #47596a; }

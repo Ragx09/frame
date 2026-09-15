@@ -1,0 +1,25 @@
+{
+  "name": "frame",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,green \"node --watch server/index.mjs\" \"vite\"",
+    "server": "node server/index.mjs",
+    "web": "vite",
+    "build": "tsc -b && vite build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}
