@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, onSaveState, type SaveState } from './lib/api'
+import { api, onSaveState, type Meta, type SaveState } from './lib/api'
+import { configureAuth, onAuthChange, signOut } from './lib/session'
+import { SignIn } from './components/SignIn'
 import type { Bundle, ID, Project } from './lib/types'
 import { Modal } from './components/ui'
 import { CommandPalette } from './components/CommandPalette'
@@ -62,24 +64,40 @@ export default function App() {
   const [sceneId, setSceneId] = useState<ID | null>(null)
   const [shotId, setShotId] = useState<ID | null>(null)
   const [save, setSave] = useState<SaveState>('idle')
-  const [meta, setMeta] = useState<{ provider: string; keyState?: string; model?: string }>({ provider: '…' })
+  const [meta, setMeta] = useState<Meta | null>(null)
   const [settings, setSettings] = useState(false)
   const [palette, setPalette] = useState(false)
   const [newProject, setNewProject] = useState(false)
   const [newName, setNewName] = useState('')
 
   useEffect(() => { const off = onSaveState(setSave); return () => { off() } }, [])
-  const loadMeta = useCallback(() => { api.meta().then(setMeta).catch(() => setMeta({ provider: 'offline' })) }, [])
+  const loadMeta = useCallback(async () => {
+    try {
+      const m = await api.meta()
+      // Which Supabase project to talk to is the server's to decide, so the
+      // auth client is configured from /api/meta rather than at build time.
+      configureAuth(m.supabaseUrl, m.supabaseKey)
+      setMeta(m)
+    } catch {
+      setMeta(null)
+    }
+  }, [])
   useEffect(() => { loadMeta() }, [loadMeta])
 
+  /* Signing in or out changes who the API answers as — reload everything. */
+  useEffect(() => onAuthChange(() => { loadMeta(); setProjectId(null) }), [loadMeta])
+
+  const needsSignIn = meta?.mode === 'cloud' && !meta.user
+
   useEffect(() => {
+    if (!meta || needsSignIn) return
     api.projects().then((ps) => {
       setProjects(ps)
       const last = localStorage.getItem('frame.project')
       const pick = ps.find((p) => p.id === last) ?? ps[0]
       if (pick) setProjectId(pick.id)
-    })
-  }, [])
+    }).catch(() => setProjects([]))
+  }, [meta, needsSignIn])
 
   const refresh = useCallback(async () => {
     if (!projectId) return
@@ -132,7 +150,7 @@ export default function App() {
     setView('idea')
   }
 
-  const ctx: Ctx | null = b ? { b, refresh, go, sceneId, shotId, setSceneId, setShotId, provider: meta.provider } : null
+  const ctx: Ctx | null = b ? { b, refresh, go, sceneId, shotId, setSceneId, setShotId, provider: meta?.provider ?? '…' } : null
 
   const crumbs = useMemo(() => {
     if (!b) return []
@@ -147,13 +165,20 @@ export default function App() {
     return out
   }, [b, view, sceneId, shotId])
 
+  /* Cloud deployments gate on sign-in; local development never does (§16). */
+  if (needsSignIn) return <SignIn meta={meta} onSignedIn={loadMeta} />
+
+  const readOnly = Boolean(b?.project?.is_demo)
+
   return (
     <>
       <div className="topbar">
         <div className="brand">
-          <span className="blk">█</span> FRAME<span className="sep">::</span>
+          <span className="blk">█</span> FRAME<span className="betabadge">BETA</span>
+          <span className="sep">::</span>
           {view.toUpperCase()} <span className="cursor">_</span>
         </div>
+        {readOnly && <span className="demoflag">demo · read-only</span>}
         <div className="crumbs">
           {crumbs.map((c, i) => (
             <span key={i} style={{ display: 'contents' }}>
@@ -167,7 +192,7 @@ export default function App() {
           <span><span className="k">scenes</span><span className="v">{counts.scenes}</span></span>
           <span><span className="k">shots</span><span className="v">{counts.shots}</span></span>
           <span><span className="k">prompts</span><span className="v">{counts.prompts}</span></span>
-          <span><span className="k">ai</span><span className="v">{meta.provider}</span></span>
+          <span><span className="k">ai</span><span className="v">{meta?.provider ?? '…'}</span></span>
         </div>
         <button className="ghost" onClick={() => setPalette(true)}>⌘K</button>
         <button className="ghost" onClick={() => setSettings(true)}>settings</button>
@@ -224,7 +249,9 @@ export default function App() {
         </div>
       </div>
 
-      {settings && <Settings meta={meta} onClose={() => setSettings(false)} onChanged={loadMeta} />}
+      {settings && meta && (
+        <Settings meta={meta} onClose={() => setSettings(false)} onChanged={loadMeta} onSignOut={signOut} />
+      )}
 
       {palette && ctx && <CommandPalette ctx={ctx} nav={NAV} onClose={() => setPalette(false)} />}
 

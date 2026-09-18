@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { Modal } from './ui'
+import type { Meta } from '../lib/api'
 
 /**
  * The model connection. FRAME works fully without a key — every AI action then
  * falls back to a local structural pass, and the UI says so rather than pretending.
  */
 export function Settings({
-  meta, onClose, onChanged,
+  meta, onClose, onChanged, onSignOut,
 }: {
-  meta: { provider: string; keyState?: string; model?: string }
+  meta: Meta
   onClose: () => void
   onChanged: () => void
+  onSignOut: () => void
 }) {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -33,9 +35,9 @@ export function Settings({
     <Modal title="settings" onClose={onClose} footer={<button onClick={onClose}>close</button>}>
       <div className="heading" style={{ marginBottom: 10 }}>assistant</div>
       <div className="inherit" style={{ marginBottom: 14 }}>
-        <div className="i" style={{ ['--vc' as string]: meta.provider === 'anthropic' ? 'var(--accent)' : 'var(--warn)' }}>
-          <span className="nm">{meta.provider === 'anthropic' ? `connected · ${meta.model}` : 'structural fallback'}</span>
-          <span className="src">{meta.keyState === 'env' ? 'from environment' : meta.keyState === 'stored' ? 'stored locally' : 'no key'}</span>
+        <div className="i" style={{ ['--vc' as string]: meta.provider === 'structural' ? 'var(--warn)' : 'var(--accent)' }}>
+          <span className="nm">{meta.provider === 'structural' ? 'structural fallback' : `connected · ${meta.model ?? meta.provider}`}</span>
+          <span className="src">{meta.capability.localKeyState === 'env' ? 'from environment' : meta.capability.localKeyState === 'stored' ? 'stored locally' : 'no key'}</span>
         </div>
       </div>
 
@@ -56,7 +58,7 @@ export function Settings({
       </div>
       <div className="segbar auto">
         <button className="primary" disabled={!key || busy} onClick={submit}>{busy ? 'verifying…' : 'save & verify'}</button>
-        {meta.keyState === 'stored' && (
+        {meta.capability.localKeyState === 'stored' && (
           <button className="danger" onClick={async () => {
             await fetch('/api/settings/key', {
               method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: '' }),

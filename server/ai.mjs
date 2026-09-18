@@ -1,172 +1,171 @@
 /**
- * AI provider abstraction.
+ * AI provider abstraction — selection only.
  *
- *   AIProvider ├── generate  ├── rewrite  ├── analyze  ├── suggest  └── structured
+ *   AIProvider
+ *   ├── openrouter   hosted "FRAME Beta AI", the developer's key (brief §5)
+ *   ├── anthropic    a developer key locally, or a beta user's own key (BYOK)
+ *   ├── structural   deterministic, local, no network, no key
+ *   └── future providers — add a file under providers/ and a case in `build()`
  *
- * Two implementations ship today:
- *   - "anthropic"  real model calls, used when a key is resolvable
- *   - "structural" deterministic, local, no network. It does honest structural
- *                  work (segmenting, extracting, reformatting) and never
- *                  pretends to be a model.
- * The UI always shows which one answered.
+ * This module answers exactly one question: *which provider should serve this
+ * request?* It performs no requests of its own, keeps no state beyond a cache
+ * of the hosted client, and never touches the database. Enforcement of beta
+ * limits, usage logging and the fallback to structural live one layer up, in
+ * `assistant.mjs`.
+ *
+ * The structural helpers are re-exported so the rest of the server keeps its
+ * single `import * as ai from './ai.mjs'`.
  */
-import Anthropic from '@anthropic-ai/sdk'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  OPENROUTER_API_KEY, OPENROUTER_MODEL,
+  ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+  hostedAvailable, cloudMode,
+} from './config.mjs'
+import { badRequest } from './errors.mjs'
+import { createOpenRouterProvider } from './providers/openrouter.mjs'
+import { createAnthropicProvider } from './providers/anthropic.mjs'
 
-const MODEL = 'claude-opus-5'
+export * from './providers/structural.mjs'
+
+/** Providers a user may bring a key for. Add here to extend BYOK (brief §8). */
+export const BYOK_PROVIDERS = {
+  anthropic: { label: 'Anthropic', prefix: 'sk-ant-', model: ANTHROPIC_MODEL },
+  openrouter: { label: 'OpenRouter', prefix: 'sk-or-', model: OPENROUTER_MODEL },
+}
+
+/** Build a provider instance by name. The only place the map lives. */
+function build(name, apiKey, { byok = false, model } = {}) {
+  switch (name) {
+    case 'openrouter': return createOpenRouterProvider({ apiKey, byok, ...(model ? { model } : {}) })
+    case 'anthropic': return createAnthropicProvider({ apiKey, ...(model ? { model } : {}) })
+    default: return null
+  }
+}
+
+/** The hosted client is stateless and shared; build it once. */
+let hostedCache = null
+function hosted() {
+  if (!hostedAvailable()) return null
+  if (!hostedCache) hostedCache = build('openrouter', OPENROUTER_API_KEY)
+  return hostedCache
+}
+
+/**
+ * getAIProvider(request) — brief §7, in order:
+ *
+ *   1. the user asked for BYOK and supplied a usable key  → their provider
+ *   2. otherwise                                          → hosted OpenRouter
+ *   3. hosted unavailable                                 → structural
+ *
+ * `session.byok` is `{ provider, key }` as resolved by the auth layer; it is
+ * never read from the request body here, and never logged.
+ */
+export function getAIProvider(session = {}) {
+  const byok = session.byok
+  if (byok?.provider && byok?.key) {
+    const p = build(byok.provider, byok.key, { byok: true })
+    if (p) return { provider: p, mode: 'byok', metered: false }
+  }
+
+  const h = hosted()
+  if (h) return { provider: h, mode: 'hosted', metered: true }
+
+  // Local development convenience: a developer's own Anthropic key still works
+  // exactly as it did before the beta, and is never metered against the hosted
+  // beta allowance because it is not the hosted key.
+  const devKey = ANTHROPIC_API_KEY || localKey()
+  const dev = devKey ? build('anthropic', devKey) : null
+  if (dev) return { provider: dev, mode: 'local-key', metered: false }
+
+  return { provider: null, mode: 'structural', metered: false }
+}
+
+/** What the current deployment offers, for `/api/meta`. Booleans only. */
+export function capability() {
+  return {
+    hosted: hostedAvailable(),
+    hostedModel: hostedAvailable() ? OPENROUTER_MODEL : null,
+    localKey: Boolean(ANTHROPIC_API_KEY || localKey()),
+    localKeyState: localKeyState(),
+    byok: Object.entries(BYOK_PROVIDERS).map(([id, p]) => ({ id, label: p.label })),
+  }
+}
+
+/**
+ * Shape-check a user-supplied key before it is stored or used. This is a
+ * typo guard, not a security control — the provider is the real authority.
+ * The key itself is never included in the thrown message.
+ */
+export function assertKeyShape(providerId, key) {
+  const spec = BYOK_PROVIDERS[providerId]
+  if (!spec) throw badRequest('That AI provider is not supported.', 'bad_provider')
+  const k = String(key ?? '').trim()
+  if (k.length < 20) throw badRequest('That does not look like an API key.', 'bad_key')
+  if (!k.startsWith(spec.prefix)) {
+    throw badRequest(`An ${spec.label} key normally starts with "${spec.prefix}".`, 'bad_key')
+  }
+  return k
+}
+
+/** Show a key as `sk-ant-••••••••••••1234` — never the middle (brief §8). */
+export function maskKey(key) {
+  const k = String(key ?? '')
+  if (k.length < 12) return '••••••••'
+  const spec = Object.values(BYOK_PROVIDERS).find((p) => k.startsWith(p.prefix))
+  const head = spec ? spec.prefix : k.slice(0, 6)
+  return `${head}${'•'.repeat(12)}${k.slice(-4)}`
+}
+
+/** Verify a key really works before the UI claims the model is connected. */
+export async function verifyKey(providerId, key) {
+  const p = build(providerId, key, { byok: true })
+  if (!p) return { ok: false, error: 'That AI provider is not supported.' }
+  try {
+    await p.verify()
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err?.expose ? err.message : 'That key was rejected by the provider.' }
+  }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* The legacy local developer key.                                     */
+/*                                                                     */
+/* Before the beta, FRAME stored one Anthropic key in                  */
+/* `data/settings.json` on the developer's own machine. Brief §16 says */
+/* local development must keep working, so that path is preserved      */
+/* exactly — but only in local mode. In cloud mode it is inert: the    */
+/* hosted key comes from the environment and a user's own key travels  */
+/* per request and is never written to disk.                           */
+/* ------------------------------------------------------------------ */
+
 const SETTINGS = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'settings.json')
 
-function settings() {
+function localSettings() {
+  if (cloudMode) return {}
   try { return JSON.parse(readFileSync(SETTINGS, 'utf8')) } catch { return {} }
 }
 
-/** Store the key locally so the workspace keeps working across restarts. */
-export function setKey(key) {
+const localKey = () => (cloudMode ? '' : localSettings().apiKey || '')
+
+export function setLocalKey(key) {
+  if (cloudMode) return
   mkdirSync(dirname(SETTINGS), { recursive: true })
   writeFileSync(SETTINGS, JSON.stringify({ apiKey: key || undefined }, null, 2))
-  client = null
 }
 
-function credential() {
-  return process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || settings().apiKey || null
-}
-
-let client = null
-function anthropic() {
-  if (client) return client
-  const key = credential()
-  if (!key) return null
-  try {
-    client = new Anthropic({ apiKey: key })
-    return client
-  } catch {
-    return null
-  }
-}
-
-export function providerName() {
-  return credential() ? 'anthropic' : 'structural'
-}
-
-export function keyState() {
-  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return 'env'
-  if (settings().apiKey) return 'stored'
+export function localKeyState() {
+  if (ANTHROPIC_API_KEY) return 'env'
+  if (localKey()) return 'stored'
   return 'none'
 }
 
-/** Confirm a key actually works before the UI claims the model is connected. */
-export async function verify() {
-  const c = anthropic()
-  if (!c) return { ok: false, error: 'No key configured.' }
-  try {
-    await c.messages.create({
-      model: MODEL, max_tokens: 16,
-      messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
-    })
-    return { ok: true }
-  } catch (err) {
-    client = null
-    return { ok: false, error: String(err?.message ?? err).slice(0, 300) }
-  }
-}
-
-const SYSTEM = `You are the creative development assistant inside FRAME, a film
-development workspace. The user is the director; you never take over the creative
-decisions. You suggest, structure and clarify — concisely, in the user's own
-register. Never invent facts about the film that the director has not implied.
-Write plainly: no marketing adjectives, no "cinematic masterpiece" filler.`
-
-/** Ask for JSON matching a shape. Returns null when no model is available. */
-export async function structured(task, context, schemaHint) {
-  const c = providerName() === 'anthropic' ? anthropic() : null
-  if (!c) return null
-  const res = await c.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM,
-    messages: [
-      {
-        role: 'user',
-        content: `${task}\n\nPROJECT CONTEXT:\n${context}\n\nRespond with JSON only, matching:\n${schemaHint}`,
-      },
-    ],
-  })
-  const text = res.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
-  const m = text.match(/\{[\s\S]*\}/)
-  if (!m) return null
-  try {
-    return JSON.parse(m[0])
-  } catch {
-    return null
-  }
-}
-
-export async function rewrite(text, instruction, context = '') {
-  const c = providerName() === 'anthropic' ? anthropic() : null
-  if (!c) return null
-  const res = await c.messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM,
-    messages: [
-      { role: 'user', content: `${instruction}\n\nCONTEXT:\n${context}\n\nTEXT:\n${text}\n\nReturn only the rewritten text.` },
-    ],
-  })
-  return res.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim()
-}
-
-/* ------------------------------------------------------------------ */
-/* Structural fallback — deterministic, local, no model.               */
-/* ------------------------------------------------------------------ */
-
-const sentences = (t) =>
-  String(t ?? '')
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-
-const VISUAL = /\b(dawn|dusk|night|morning|light|sun|shadow|colou?r|green|copper|tree|house|room|window|smoke|steam|water|sea|rain|fire|grain|texture|bottle|still|village|coast)\w*/gi
-const FEELING = /\b(nostalg\w+|wonder|pride|grief|joy|mystery|melanchol\w+|intima\w+|quiet|warm|cold|ancient|modern|sacred|tender|fear|loss|hope)\w*/gi
-
-export function structuralIdea(raw) {
-  const sents = sentences(raw)
-  const visual = [...new Set((raw.match(VISUAL) ?? []).map((s) => s.toLowerCase()))]
-  const feeling = [...new Set((raw.match(FEELING) ?? []).map((s) => s.toLowerCase()))]
-  const questions = []
-  if (!/\bend\w*|final\w*|last\b/i.test(raw)) questions.push('How does it end?')
-  if (!feeling.length) questions.push('What should the audience feel at the close?')
-  if (!/\bwho\b|\bhe\b|\bshe\b|\bthey\b|\bman\b|\bwoman\b|\bboy\b|\bgirl\b/i.test(raw))
-    questions.push('Who do we follow through this?')
-  questions.push('What is the one image the film is built around?')
-  return {
-    central_idea: sents[0] ?? '',
-    premise: sents.slice(0, 2).join(' '),
-    theme: feeling.slice(0, 3).join(', '),
-    emotional_direction: feeling.join(' → '),
-    conflict: '',
-    ending: sents.length > 2 ? sents[sents.length - 1] : '',
-    questions: questions.join('\n'),
-    visual_motifs: visual.slice(0, 12).join(', '),
-    _source: 'structural',
-  }
-}
-
-/** Split prose into screenplay elements — structural, not authored. */
-export function structuralScript(text) {
-  const out = []
-  for (const line of String(text ?? '').split(/\n+/)) {
-    const t = line.trim()
-    if (!t) continue
-    if (/^(INT|EXT|INT\.\/EXT)[\s.]/i.test(t)) out.push({ type: 'scene_heading', text: t.toUpperCase() })
-    else if (/^(CUT TO|FADE (IN|OUT)|DISSOLVE)/i.test(t)) out.push({ type: 'transition', text: t.toUpperCase() })
-    else if (/^[A-Z][A-Z \t.'-]{1,30}$/.test(t)) out.push({ type: 'character', text: t })
-    else if (/^\(.*\)$/.test(t)) out.push({ type: 'parenthetical', text: t })
-    else out.push({ type: 'action', text: t })
-  }
-  return out
+export async function verifyLocalKey() {
+  const key = ANTHROPIC_API_KEY || localKey()
+  if (!key) return { ok: false, error: 'No key configured.' }
+  return verifyKey('anthropic', key)
 }

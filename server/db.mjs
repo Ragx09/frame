@@ -1,53 +1,61 @@
-import { DatabaseSync } from 'node:sqlite'
-import { readFileSync, mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+/**
+ * The data layer — one interface, two drivers.
+ *
+ *   local development  → SQLite (`node:sqlite`, no native build, file on disk)
+ *   beta deployment    → Supabase Postgres (`DATABASE_URL` is set)
+ *
+ * Every helper keeps the signature it had when FRAME was SQLite-only; the only
+ * change is that they are now `async`, because no synchronous Postgres driver
+ * exists. Business logic above this line is written once and does not know or
+ * care which database it is talking to (brief §16, §47).
+ *
+ * The application's SQL is written in the portable subset both accept —
+ * `?` placeholders, no dialect functions — and the Postgres driver rewrites
+ * placeholders. Booleans are INTEGER 0/1 on both, so truthiness is identical.
+ */
 import { randomUUID } from 'node:crypto'
+import { DATABASE_URL, cloudMode } from './config.mjs'
+import { createSqliteDriver } from './drivers/sqlite.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const dataDir = join(here, '..', 'data')
-mkdirSync(dataDir, { recursive: true })
+const driver = DATABASE_URL
+  ? (await import('./drivers/postgres.mjs')).createPostgresDriver()
+  : createSqliteDriver()
 
-export const db = new DatabaseSync(join(dataDir, 'frame.db'))
-db.exec(readFileSync(join(here, 'schema.sql'), 'utf8'))
-
-// idempotent additive migrations for databases created by an earlier schema
-for (const [table, col, type] of [['idea_development', 'visual_motifs', 'TEXT']]) {
-  const has = db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === col)
-  if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`)
-}
+export const dialect = driver.dialect
+export const isCloud = cloudMode
 
 export const uid = () => randomUUID()
 export const now = () => new Date().toISOString()
 
-export const all = (sql, ...p) => db.prepare(sql).all(...p)
-export const one = (sql, ...p) => db.prepare(sql).get(...p) ?? null
-export const run = (sql, ...p) => db.prepare(sql).run(...p)
+export const all = (sql, ...p) => driver.all(sql, p)
+export const one = (sql, ...p) => driver.one(sql, p)
+export const run = (sql, ...p) => driver.run(sql, p)
+export const exec = (sql) => driver.exec(sql)
+export const tx = (fn) => driver.tx(fn)
+export const close = () => driver.close()
 
-/** Columns of a table, minus ones the client must never set directly. */
+/** Columns of a table. Cached — the schema does not change at runtime. */
 const colCache = new Map()
-export function columns(table) {
-  if (!colCache.has(table)) {
-    colCache.set(table, all(`PRAGMA table_info(${table})`).map((r) => r.name))
-  }
+export async function columns(table) {
+  if (!colCache.has(table)) colCache.set(table, await driver.columns(table))
   return colCache.get(table)
 }
 
 /** Build an UPDATE from a partial patch, ignoring unknown keys. */
-export function patch(table, idCol, id, body, extra = {}) {
-  const cols = columns(table)
+export async function patch(table, idCol, id, body, extra = {}) {
+  const cols = await columns(table)
   const data = { ...body, ...extra }
   const keys = Object.keys(data).filter((k) => cols.includes(k) && k !== idCol)
   if (!keys.length) return
   const sql = `UPDATE ${table} SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE ${idCol} = ?`
-  run(sql, ...keys.map((k) => normalize(data[k])), id)
+  await run(sql, ...keys.map((k) => normalize(data[k])), id)
 }
 
-export function insert(table, data) {
-  const cols = columns(table)
+export async function insert(table, data) {
+  const cols = await columns(table)
   const keys = Object.keys(data).filter((k) => cols.includes(k))
   const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`
-  run(sql, ...keys.map((k) => normalize(data[k])))
+  await run(sql, ...keys.map((k) => normalize(data[k])))
   return data.id
 }
 
@@ -59,8 +67,8 @@ function normalize(v) {
 }
 
 /** Snapshot any row into the version history. */
-export function snapshot(projectId, entityType, entityId, row, label = '') {
-  insert('versions', {
+export async function snapshot(projectId, entityType, entityId, row, label = '') {
+  await insert('versions', {
     id: uid(),
     project_id: projectId,
     entity_type: entityType,
@@ -69,4 +77,10 @@ export function snapshot(projectId, entityType, entityId, row, label = '') {
     snapshot: JSON.stringify(row),
     created_at: now(),
   })
+}
+
+/** Liveness probe for `/health` — cheap, and never returns connection detail. */
+export async function ping() {
+  await driver.one('SELECT 1 AS ok', [])
+  return true
 }

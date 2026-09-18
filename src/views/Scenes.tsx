@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { Ctx } from '../App'
 import { api } from '../lib/api'
 import { Field, Select, SectionHead, Empty, Tag } from '../components/ui'
 import { EntityPicker } from '../components/EntityPicker'
 import { References } from '../components/References'
 import { VersionHistory } from '../components/VersionHistory'
+import { BreakdownModal, type Proposal } from '../components/Breakdown'
 
 const DNA_FIELDS: [string, string, number, string?][] = [
   ['color', 'color', 2, 'dark copper tones'],
@@ -14,6 +15,23 @@ const DNA_FIELDS: [string, string, number, string?][] = [
   ['camera', 'camera', 2, ''],
   ['atmosphere', 'atmosphere', 2, 'steam, quiet'],
 ]
+
+const SCENE_CARD: [string, string][] = [
+  ['title', 'title'], ['location_text', 'place'], ['time_of_day', 'time'], ['duration', 'duration'],
+  ['story_purpose', 'story'], ['emotional_purpose', 'emotion'], ['description', 'description'],
+]
+const SHOT_CARD: [string, string][] = [
+  ['title', 'title'], ['description', 'description'], ['subject_primary', 'subject'], ['action', 'action'],
+  ['shot_type', 'shot'], ['lens', 'lens'], ['camera_movement', 'movement'], ['camera_angle', 'angle'],
+  ['light_source', 'light'], ['emotion', 'emotion'], ['duration', 'duration'],
+]
+
+type Pending = {
+  kind: 'scene' | 'shot'
+  rows: Proposal[]
+  source: string
+  message: string | null
+}
 
 export function ScenesView({ ctx }: { ctx: Ctx }) {
   const { b, refresh, sceneId, setSceneId, go } = ctx
@@ -27,10 +45,41 @@ export function ScenesView({ ctx }: { ctx: Ctx }) {
   const dna = b.sceneDna.find((d) => d.scene_id === sceneId)
   const shots = b.shots.filter((s) => s.scene_id === sceneId)
 
+  const [pending, setPending] = useState<Pending | null>(null)
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+
   const add = async () => {
     const created = await api.addScene(b.project.id, { title: 'New scene' }) as { id: string }
     await refresh()
     setSceneId(created.id)
+  }
+
+  /** Propose scenes from the story. Writes nothing — the modal applies. */
+  const breakStory = async () => {
+    setBusy('scenes'); setErr('')
+    try {
+      const out = await api.scenesFromStory(b.project.id)
+      setPending({ kind: 'scene', rows: out.scenes, source: out.source, message: out.message })
+    } catch (e) {
+      setErr(String((e as Error).message))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  /** Propose shots for the scene on screen. Writes nothing — the modal applies. */
+  const breakScene = async () => {
+    if (!scene) return
+    setBusy('shots'); setErr('')
+    try {
+      const out = await api.shotsFromScene(scene.id)
+      setPending({ kind: 'shot', rows: out.shots, source: out.source, message: out.message })
+    } catch (e) {
+      setErr(String((e as Error).message))
+    } finally {
+      setBusy('')
+    }
   }
 
   const save = async (body: Record<string, unknown>) => {
@@ -49,8 +98,15 @@ export function ScenesView({ ctx }: { ctx: Ctx }) {
           <h1>Scenes</h1>
           <div className="sub">Each scene may extend the global visual language — it never silently replaces it.</div>
         </div>
-        <div className="actions"><button className="primary" onClick={add}>+ scene</button></div>
+        <div className="actions">
+          <button onClick={breakStory} disabled={busy === 'scenes'}>
+            {busy === 'scenes' ? 'reading the story…' : 'break story into scenes'}
+          </button>
+          <button className="primary" onClick={add}>+ scene</button>
+        </div>
       </div>
+
+      {err && <div className="warnline v-error" style={{ margin: '0 0 10px' }}><span className="dot" />{err}</div>}
 
       <div className="pagebody">
         <div className="side" style={{ width: 268 }}>
@@ -129,6 +185,9 @@ export function ScenesView({ ctx }: { ctx: Ctx }) {
             <EntityPicker ctx={ctx} ownerType="scene" ownerId={scene.id} />
 
             <SectionHead title="shots" count={shots.length}>
+              <button onClick={breakScene} disabled={busy === 'shots'}>
+                {busy === 'shots' ? 'breaking down…' : 'break into shots'}
+              </button>
               <button onClick={async () => { await api.addShot(scene.id); await refresh() }}>+ shot</button>
             </SectionHead>
             {shots.length === 0 ? <Empty>no shots yet</Empty> : (
@@ -161,6 +220,23 @@ export function ScenesView({ ctx }: { ctx: Ctx }) {
           </div>
         )}
       </div>
+
+      {pending && (
+        <BreakdownModal
+          title={pending.kind === 'scene' ? 'proposed scenes' : `proposed shots — scene ${String(scene?.number ?? 0).padStart(2, '0')}`}
+          noun={pending.kind}
+          rows={pending.rows}
+          source={pending.source}
+          message={pending.message}
+          fields={pending.kind === 'scene' ? SCENE_CARD : SHOT_CARD}
+          onClose={() => setPending(null)}
+          onApply={async (rows) => {
+            if (pending.kind === 'scene') await api.applyScenes(b.project.id, rows)
+            else if (scene) await api.applyShots(scene.id, rows)
+            await refresh()
+          }}
+        />
+      )}
     </div>
   )
 }

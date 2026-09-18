@@ -1,16 +1,20 @@
 {
   "name": "frame",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0-beta",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,green \"node --watch server/index.mjs\" \"vite\"",
     "server": "node server/index.mjs",
     "web": "vite",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build",
+    "start": "node server/index.mjs",
+    "migrate": "psql \"$DATABASE_URL\" -f supabase/migrations/0001_init.sql"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
+    "@supabase/supabase-js": "^2.116.0",
+    "pg": "^8.23.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -21,5 +25,8 @@
     "concurrently": "^10.0.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

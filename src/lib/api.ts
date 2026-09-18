@@ -1,6 +1,36 @@
 import type { Bundle, ID, Project, PromptView } from './types'
+import { accessToken } from './session'
+import { byokHeaders } from './byok'
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+
+/** A proposed breakdown: rows that do not exist yet, under `scenes` or `shots`. */
+export type Breakdown<K extends 'scenes' | 'shots'> = {
+  [P in K]: (Record<string, string> & { entities?: string[] })[]
+} & { source: string; existing: number; message: string | null }
+
+/** An error carrying the server's user-safe message and machine-readable code. */
+export class ApiError extends Error {
+  status: number
+  code: string
+  requestId: string
+  constructor(status: number, message: string, code = '', requestId = '') {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.requestId = requestId
+  }
+}
+
+/**
+ * Where the API lives. Empty in development, where Vite proxies `/api` to the
+ * local server; in production it is the deployed backend's origin, injected at
+ * build time so no host is ever hardcoded (brief §30).
+ */
+const API_BASE = String(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+
+export const apiBase = () => API_BASE
 
 const listeners = new Set<(s: SaveState) => void>()
 let pending = 0
@@ -12,17 +42,41 @@ export function onSaveState(fn: (s: SaveState) => void) {
 }
 const emit = (s: SaveState) => listeners.forEach((fn) => fn(s))
 
+/** Notified when the server says the beta allowance is spent, so the UI can say so. */
+const limitListeners = new Set<(message: string) => void>()
+export function onBetaLimit(fn: (message: string) => void) {
+  limitListeners.add(fn)
+  return () => limitListeners.delete(fn)
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const mutating = method !== 'GET'
   if (mutating) { pending++; window.clearTimeout(timer); emit('saving') }
   try {
-    const res = await fetch(`/api${path}`, {
+    const token = await accessToken()
+    const res = await fetch(`${API_BASE}/api${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      headers: {
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        // The user's own key, when they have set one. Held in this browser and
+        // sent only on the requests that use it — see lib/byok.ts.
+        ...byokHeaders(),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const data = await res.json().catch(() => null)
-    if (!res.ok) throw new Error((data as { error?: string })?.error ?? `${res.status}`)
+    if (!res.ok) {
+      const d = data as { error?: string; code?: string; requestId?: string } | null
+      const err = new ApiError(
+        res.status,
+        d?.error ?? 'FRAME couldn’t complete that request. Please try again.',
+        d?.code ?? '',
+        d?.requestId ?? '',
+      )
+      if (err.code === 'beta_limit') limitListeners.forEach((fn) => fn(err.message))
+      throw err
+    }
     if (mutating) {
       pending--
       if (!pending) { emit('saved'); timer = window.setTimeout(() => emit('idle'), 2200) }
@@ -34,8 +88,47 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   }
 }
 
+/** What `/api/meta` tells the browser. Booleans and public URLs only. */
+export interface Meta {
+  version: string
+  beta: boolean
+  mode: 'cloud' | 'local'
+  hostedAI: boolean
+  hostedModel: string | null
+  dailyLimit: number
+  feedbackUrl: string | null
+  supabaseUrl: string | null
+  supabaseKey: string | null
+  capability: {
+    hosted: boolean
+    hostedModel: string | null
+    localKey: boolean
+    localKeyState?: 'env' | 'stored' | 'none'
+    byok: { id: string; label: string }[]
+  }
+  user: { id: string; email: string } | null
+  local: boolean
+  /** The provider that would answer this caller right now. */
+  provider: string
+  /** How that provider was chosen: hosted, byok, local-key or structural. */
+  aiMode: 'hosted' | 'byok' | 'local-key' | 'structural'
+  model: string | null
+  /** Whether requests currently count against the beta allowance. */
+  metered: boolean
+  usage: { used: number; limit: number; remaining: number; day: string } | null
+}
+
 export const api = {
-  meta: () => req<{ provider: string; keyState?: string; model?: string; version: string }>('GET', '/meta'),
+  meta: () => req<Meta>('GET', '/meta'),
+
+  demo: () => req<{ id: string | null; name: string | null }>('GET', '/demo'),
+
+  betaUsage: () => req<{ used: number; limit: number; remaining: number; day: string }>('GET', '/beta/usage'),
+  verifyByok: (provider: string, key: string) =>
+    req<{ ok: boolean; error?: string; masked: string | null; provider: string }>(
+      'POST', '/settings/byok/verify', { provider, key }),
+  sendFeedback: (body: string, category: string) =>
+    req<{ ok: boolean }>('POST', '/feedback', { body, category }),
 
   projects: () => req<Project[]>('GET', '/projects'),
   createProject: (name: string) => req<Project>('POST', '/projects', { name }),
@@ -52,6 +145,15 @@ export const api = {
     req<{ text: string | null; source: string; message?: string }>('POST', '/ai/rewrite', { text, instruction, context }),
   scriptFromStory: (id: ID) =>
     req<{ elements: { type: string; text: string }[] }>('POST', `/projects/${id}/ai/script-from-story`),
+
+  scenesFromStory: (id: ID) =>
+    req<Breakdown<'scenes'>>('POST', `/projects/${id}/ai/scenes-from-story`),
+  applyScenes: (id: ID, apply: Record<string, unknown>[]) =>
+    req<{ count: number }>('POST', `/projects/${id}/ai/scenes-from-story`, { apply }),
+  shotsFromScene: (sid: ID) =>
+    req<Breakdown<'shots'>>('POST', `/scenes/${sid}/ai/shots-from-scene`),
+  applyShots: (sid: ID, apply: Record<string, unknown>[]) =>
+    req<{ count: number }>('POST', `/scenes/${sid}/ai/shots-from-scene`, { apply }),
 
   patchDna: (id: ID, body: Record<string, unknown>) => req('PATCH', `/dna/${id}`, body),
   newDnaVersion: (pid: ID, label?: string, fields?: Record<string, unknown>) =>

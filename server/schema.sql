@@ -3,6 +3,8 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS projects (
   id          TEXT PRIMARY KEY,
+  owner_id    TEXT,                   -- NULL in local mode; the user in cloud mode
+  is_demo     INTEGER DEFAULT 0,      -- the read-only public demo film
   name        TEXT NOT NULL,
   format      TEXT DEFAULT 'cinematic brand film',
   status      TEXT DEFAULT 'Creative Development',
@@ -13,6 +15,8 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS idea (
   project_id  TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
@@ -198,3 +202,51 @@ CREATE TABLE IF NOT EXISTS versions (
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_versions_entity ON versions(entity_type, entity_id, created_at);
+
+/* ===================================================================
+   BETA — identity, usage accounting and feedback.
+
+   Everything below is additive. A database created by the pre-beta
+   schema is migrated forward by the additive ALTERs in the SQLite
+   driver, so an existing local `frame.db` keeps working untouched.
+   =================================================================== */
+
+/* A user is created on first authenticated request. Supabase Auth owns
+   the credentials; this row exists only so project ownership has
+   something local to reference. No password, no token, ever. */
+CREATE TABLE IF NOT EXISTS users (
+  id          TEXT PRIMARY KEY,      -- Supabase auth.users.id (uuid)
+  email       TEXT DEFAULT '',
+  created_at  TEXT NOT NULL,
+  last_seen_at TEXT
+);
+
+/* Hosted-AI accounting. One row per hosted request, successful or not.
+   Deliberately NOT a billing system (brief §35) — it exists so the beta
+   limit can be enforced and the developer can see what the beta costs. */
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  day         TEXT NOT NULL,          -- UTC YYYY-MM-DD, the limit window
+  operation   TEXT NOT NULL,
+  provider    TEXT NOT NULL,
+  model       TEXT DEFAULT '',
+  metered     INTEGER DEFAULT 1,      -- 0 for BYOK and structural
+  success     INTEGER DEFAULT 1,
+  input_tokens  INTEGER,
+  output_tokens INTEGER,
+  duration_ms INTEGER,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_user_day ON ai_usage(user_id, day);
+
+/* Beta feedback, when no PUBLIC_FEEDBACK_URL is configured. */
+CREATE TABLE IF NOT EXISTS feedback (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT,
+  category    TEXT DEFAULT 'general',
+  body        TEXT NOT NULL,
+  app_version TEXT DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at);

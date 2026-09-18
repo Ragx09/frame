@@ -270,3 +270,125 @@
 
 /* keep the idea/story writing surfaces at a comfortable measure */
 .page .main textarea { max-width: 100%; }
+
+/* =====================================================================
+   BETA — badge, demo flag and the landing/sign-in screen.
+   Built from the existing tokens in theme.css only: no new palette, no
+   card system, nothing that would make FRAME look like a dashboard
+   template (brief §37).
+   ===================================================================== */
+
+.betabadge {
+  margin-left: 8px;
+  padding: 1px 5px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--ink);
+  background: var(--accent);
+  border-radius: 2px;
+  vertical-align: 2px;
+  text-shadow: none;
+}
+
+.demoflag {
+  margin-left: 12px;
+  padding: 2px 7px;
+  font-size: 9.5px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* ------------------------------ landing ------------------------------ */
+.landing {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  display: grid;
+  place-items: start center;
+}
+
+.landing-inner {
+  width: min(680px, calc(100% - 32px));
+  padding: 56px 0 72px;
+}
+
+.landing-mark {
+  font-size: 18px;
+  letter-spacing: 3px;
+  color: var(--fg-bright);
+  margin-bottom: 28px;
+}
+.landing-mark .blk { color: var(--accent); }
+
+.landing-line {
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--fg-bright);
+  margin-bottom: 22px;
+  font-weight: 400;
+}
+
+.landing-pipe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 22px;
+  font-size: 10px;
+  letter-spacing: 1.3px;
+}
+.pipe-step { display: inline-flex; align-items: center; gap: 8px; }
+.pipe-arrow { color: var(--fg-dim); }
+.pipe-name { color: var(--accent); }
+
+.landing-note {
+  color: var(--fg-dim);
+  line-height: 1.85;
+  margin: 0 0 26px;
+  max-width: 58ch;
+}
+
+.landing-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 34px;
+}
+
+.landing-cta {
+  display: inline-block;
+  padding: 9px 20px;
+  background: var(--accent);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  text-decoration: none;
+  border-radius: 2px;
+}
+.landing-cta:hover { filter: brightness(1.12); }
+
+.landing-free { color: var(--fg-dim); font-size: 10.5px; letter-spacing: 1px; }
+
+.landing-auth {
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  border-radius: 3px;
+  padding: 20px;
+  margin-bottom: 22px;
+}
+
+.landing-foot { line-height: 1.9; }
+.landing-foot a { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .landing-inner { padding: 32px 0 48px; }
+  .landing-line { font-size: 18px; }
+}

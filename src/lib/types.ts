@@ -2,6 +2,10 @@ export type ID = string
 
 export interface Project {
   id: ID; name: string; format: string; status: string
+  /** NULL in local mode; the owning user in cloud mode. Server-set only. */
+  owner_id: string | null
+  /** 1 for the public, read-only demo film. Server-set only. */
+  is_demo: number
   logline: string; core_emotion: string
   focus_scene_id: ID | null; focus_shot_id: ID | null
   created_at: string; updated_at: string
