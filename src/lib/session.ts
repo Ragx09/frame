@@ -32,7 +32,18 @@ export function configureAuth(url: string | null, publishableKey: string | null)
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   })
   configured = true
+  // Listeners may have subscribed before the client existed (the app mounts
+  // before /api/meta answers), so they are held here and attached now.
+  client.auth.onAuthStateChange((event, session) => {
+    const changed = event === 'SIGNED_IN' || event === 'SIGNED_OUT'
+      || (event === 'INITIAL_SESSION' && session !== null)
+    if (!changed) return
+    // Deferred: calling back into supabase-js inside this callback deadlocks.
+    window.setTimeout(() => authListeners.forEach((fn) => fn()), 0)
+  })
 }
+
+const authListeners = new Set<() => void>()
 
 export const authEnabled = (): boolean => configured
 
@@ -50,9 +61,8 @@ export async function currentUser(): Promise<FrameUser | null> {
 }
 
 export function onAuthChange(fn: () => void): () => void {
-  if (!client) return () => {}
-  const { data } = client.auth.onAuthStateChange(() => fn())
-  return () => data.subscription.unsubscribe()
+  authListeners.add(fn)
+  return () => { authListeners.delete(fn) }
 }
 
 /** Supabase returns its own messages; they are already user-facing. */

@@ -28,6 +28,23 @@ export function SignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: () => voi
 
   useEffect(() => { api.demo().then((d) => setDemoId(d.id)).catch(() => setDemoId(null)) }, [])
 
+  /* Offer Google only when the Supabase project has the provider switched on;
+     otherwise the button leads to Supabase's "provider is not enabled" page. */
+  const [google, setGoogle] = useState(false)
+  useEffect(() => {
+    if (!meta.supabaseUrl || !meta.supabaseKey) return
+    fetch(`${meta.supabaseUrl}/auth/v1/settings`, { headers: { apikey: meta.supabaseKey } })
+      .then((r) => r.json())
+      .then((s: { external?: { google?: boolean } }) => setGoogle(Boolean(s.external?.google)))
+      .catch(() => setGoogle(false))
+  }, [meta.supabaseUrl, meta.supabaseKey])
+
+  const google_ = async () => {
+    setError('')
+    const res = await signInWithGoogle()
+    if (!res.ok) setError(res.error)
+  }
+
   const submit = async () => {
     if (!email || !password) return
     setBusy(true); setError(''); setNotice('')
@@ -104,7 +121,7 @@ export function SignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: () => voi
             <button onClick={() => { setMode(mode === 'in' ? 'up' : 'in'); setError(''); setNotice('') }}>
               {mode === 'in' ? 'create account' : 'i have an account'}
             </button>
-            <button onClick={() => signInWithGoogle()}>continue with google</button>
+            {google && <button onClick={google_}>continue with google</button>}
           </div>
 
           {error && (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, onSaveState, type Meta, type SaveState } from './lib/api'
-import { configureAuth, onAuthChange, signOut } from './lib/session'
+import { accessToken, configureAuth, onAuthChange, signOut } from './lib/session'
 import { SignIn } from './components/SignIn'
 import type { Bundle, ID, Project } from './lib/types'
 import { Modal } from './components/ui'
@@ -69,14 +69,21 @@ export default function App() {
   const [palette, setPalette] = useState(false)
   const [newProject, setNewProject] = useState(false)
   const [newName, setNewName] = useState('')
+  const [createError, setCreateError] = useState('')
+  const [creating, setCreating] = useState(false)
+  /* `?demo=<id>` — the landing page's "Try FRAME" link. Readable signed out. */
+  const demoParam = useMemo(() => new URLSearchParams(window.location.search).get('demo'), [])
 
   useEffect(() => { const off = onSaveState(setSave); return () => { off() } }, [])
   const loadMeta = useCallback(async () => {
     try {
-      const m = await api.meta()
+      let m = await api.meta()
       // Which Supabase project to talk to is the server's to decide, so the
       // auth client is configured from /api/meta rather than at build time.
       configureAuth(m.supabaseUrl, m.supabaseKey)
+      // The first call can go out before the client existed, so without the
+      // stored session's token. Ask again now that it can be sent.
+      if (m.mode === 'cloud' && !m.user && await accessToken()) m = await api.meta()
       setMeta(m)
     } catch {
       setMeta(null)
@@ -87,17 +94,23 @@ export default function App() {
   /* Signing in or out changes who the API answers as — reload everything. */
   useEffect(() => onAuthChange(() => { loadMeta(); setProjectId(null) }), [loadMeta])
 
-  const needsSignIn = meta?.mode === 'cloud' && !meta.user
+  const signedOut = meta?.mode === 'cloud' && !meta.user
+  const needsSignIn = signedOut && !demoParam
 
   useEffect(() => {
     if (!meta || needsSignIn) return
+    if (signedOut && demoParam) { setProjects([]); setProjectId(demoParam); return }
     api.projects().then((ps) => {
       setProjects(ps)
       const last = localStorage.getItem('frame.project')
-      const pick = ps.find((p) => p.id === last) ?? ps[0]
-      if (pick) setProjectId(pick.id)
+      // Open the user's own film; the read-only demo only when asked for, so a
+      // new account lands on "create a film" rather than an uneditable film.
+      const pick = ps.find((p) => p.id === last)
+        ?? ps.find((p) => !p.is_demo)
+        ?? (demoParam ? ps.find((p) => p.id === demoParam) : undefined)
+      setProjectId(pick?.id ?? null)
     }).catch(() => setProjects([]))
-  }, [meta, needsSignIn])
+  }, [meta, needsSignIn, signedOut, demoParam])
 
   const refresh = useCallback(async () => {
     if (!projectId) return
@@ -141,13 +154,29 @@ export default function App() {
     return { scenes: b.scenes.length, shots: b.shots.length, prompts: b.prompts.length }
   }, [b])
 
+  const openNewProject = () => {
+    // Signed-out demo visitors have nowhere to save a film yet.
+    if (signedOut) { window.location.href = window.location.pathname; return }
+    setCreateError('')
+    setNewProject(true)
+  }
+
   const createProject = async () => {
-    const p = await api.createProject(newName || 'Untitled Film')
-    setProjects((ps) => [p, ...(ps ?? [])])
-    setProjectId(p.id)
-    setNewProject(false)
-    setNewName('')
-    setView('idea')
+    if (creating) return
+    setCreating(true)
+    setCreateError('')
+    try {
+      const p = await api.createProject(newName || 'Untitled Film')
+      setProjects((ps) => [p, ...(ps ?? [])])
+      setProjectId(p.id)
+      setNewProject(false)
+      setNewName('')
+      setView('idea')
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'FRAME couldn’t create the film. Please try again.')
+    } finally {
+      setCreating(false)
+    }
   }
 
   const ctx: Ctx | null = b ? { b, refresh, go, sceneId, shotId, setSceneId, setShotId, provider: meta?.provider ?? '…' } : null
@@ -207,10 +236,14 @@ export default function App() {
             <div className="label" style={{ padding: '0 14px 6px' }}>film</div>
             <select
               value={projectId ?? ''}
-              onChange={(e) => e.target.value === '__new' ? setNewProject(true) : setProjectId(e.target.value)}
+              onChange={(e) => e.target.value === '__new' ? openNewProject() : setProjectId(e.target.value)}
               style={{ width: 'calc(100% - 20px)', margin: '0 10px 4px' }}
             >
+              {!projectId && <option value="" disabled>choose a film…</option>}
               {(projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {b && !(projects ?? []).some((p) => p.id === b.project.id) && (
+                <option value={b.project.id}>{b.project.name}</option>
+              )}
               <option value="__new">+ new film…</option>
             </select>
           </div>
@@ -238,7 +271,7 @@ export default function App() {
                 {projects === null ? 'loading…' : (
                   <>
                     no film yet<br />
-                    <button className="primary" style={{ marginTop: 14 }} onClick={() => setNewProject(true)}>create a film</button>
+                    <button className="primary" style={{ marginTop: 14 }} onClick={openNewProject}>create a film</button>
                   </>
                 )}
               </div>
@@ -261,7 +294,7 @@ export default function App() {
           onClose={() => setNewProject(false)}
           footer={<>
             <button onClick={() => setNewProject(false)}>cancel</button>
-            <button className="primary" onClick={createProject}>create</button>
+            <button className="primary" disabled={creating} onClick={createProject}>{creating ? 'creating…' : 'create'}</button>
           </>}
         >
           <div className="field">
@@ -272,7 +305,8 @@ export default function App() {
               onKeyDown={(e) => { if (e.key === 'Enter') createProject() }}
             />
           </div>
-          <div className="tiny dim">You can rename it any time. Everything is stored locally.</div>
+          {createError && <div className="tiny" style={{ color: 'var(--error)', marginBottom: 6 }}>{createError}</div>}
+          <div className="tiny dim">You can rename it any time.</div>
         </Modal>
       )}
     </>
