@@ -305,7 +305,7 @@ export default function App() {
           ) : !ctx ? (
             <div className="block grow" style={{ display: 'grid', placeItems: 'center' }}>
               <div className="empty">
-                {projects === null ? 'loading…' : (
+                {projects === null || projectId ? 'loading…' : (
                   <>
                     no film yet<br />
                     <button className="primary" style={{ marginTop: 14 }} onClick={openNewProject}>create a film</button>

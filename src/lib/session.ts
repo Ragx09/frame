@@ -34,10 +34,18 @@ export function configureAuth(url: string | null, publishableKey: string | null)
   configured = true
   // Listeners may have subscribed before the client existed (the app mounts
   // before /api/meta answers), so they are held here and attached now.
+  // Supabase repeats SIGNED_IN (tab refocus, token restore); only a change of
+  // user — in, out, or another account — is worth reloading the app for.
+  let lastUser: string | null | undefined
   client.auth.onAuthStateChange((event, session) => {
-    const changed = event === 'SIGNED_IN' || event === 'SIGNED_OUT'
-      || (event === 'INITIAL_SESSION' && session !== null)
-    if (!changed) return
+    if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'INITIAL_SESSION') return
+    const user = session?.user.id ?? null
+    const first = lastUser === undefined
+    if (user === lastUser) return
+    lastUser = user
+    // The first event is the session the app already loaded with: loadMeta
+    // awaits getSession(), which waits for a stored or redirected session.
+    if (first) return
     // Deferred: calling back into supabase-js inside this callback deadlocks.
     window.setTimeout(() => authListeners.forEach((fn) => fn()), 0)
   })
