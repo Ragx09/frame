@@ -60,6 +60,44 @@ export async function currentUser(): Promise<FrameUser | null> {
   return data.user ? { id: data.user.id, email: data.user.email ?? '' } : null
 }
 
+export interface FrameProfile extends FrameUser {
+  name: string
+  avatar: string
+  /** How they sign in: 'email', 'google', … */
+  provider: string
+  createdAt: string
+}
+
+/** The signed-in user's account details, straight from Supabase Auth. */
+export async function currentProfile(): Promise<FrameProfile | null> {
+  if (!client) return null
+  const { data } = await client.auth.getUser()
+  const u = data.user
+  if (!u) return null
+  const md = (u.user_metadata ?? {}) as Record<string, string | undefined>
+  return {
+    id: u.id,
+    email: u.email ?? '',
+    name: md.full_name ?? md.name ?? '',
+    avatar: md.avatar_url ?? md.picture ?? '',
+    provider: String(u.app_metadata?.provider ?? 'email'),
+    createdAt: u.created_at,
+  }
+}
+
+/** Kept in Supabase user metadata — FRAME's own database is not involved. */
+export async function updateDisplayName(name: string) {
+  if (!client) return { ok: false as const, error: 'Sign-in is not configured.' }
+  const { error } = await client.auth.updateUser({ data: { full_name: name.trim() } })
+  return fail(error)
+}
+
+export async function changePassword(password: string) {
+  if (!client) return { ok: false as const, error: 'Sign-in is not configured.' }
+  const { error } = await client.auth.updateUser({ password })
+  return fail(error)
+}
+
 export function onAuthChange(fn: () => void): () => void {
   authListeners.add(fn)
   return () => { authListeners.delete(fn) }

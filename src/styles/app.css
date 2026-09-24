@@ -392,3 +392,12 @@
   .landing-inner { padding: 32px 0 48px; }
   .landing-line { font-size: 18px; }
 }
+
+/* profile */
+.profilehead { display: flex; align-items: center; gap: 16px; }
+.profilehead .avatar {
+  width: 56px; height: 56px; flex: none; display: grid; place-items: center;
+  border: 1px solid var(--accent); background: var(--bg-raised); color: var(--accent);
+  font-size: 22px; object-fit: cover;
+}
+.topbar .who { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

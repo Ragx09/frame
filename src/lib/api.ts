@@ -127,6 +127,9 @@ export const api = {
   verifyByok: (provider: string, key: string) =>
     req<{ ok: boolean; error?: string; masked: string | null; provider: string }>(
       'POST', '/settings/byok/verify', { provider, key }),
+  /** Local development only — the cloud server refuses it (see Settings). */
+  setLocalKey: (key: string) =>
+    req<{ keyState: string; ok: boolean; error?: string }>('POST', '/settings/key', { key }),
   sendFeedback: (body: string, category: string) =>
     req<{ ok: boolean }>('POST', '/feedback', { body, category }),
 

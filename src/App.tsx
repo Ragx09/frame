@@ -17,11 +17,12 @@ import { ScenesView } from './views/Scenes'
 import { ShotBoardView } from './views/ShotBoard'
 import { PromptLabView } from './views/PromptLab'
 import { ExportView } from './views/Export'
+import { ProfileView } from './views/Profile'
 
 export type ViewId =
   | 'home' | 'idea' | 'story' | 'script' | 'vision' | 'dna'
   | 'characters' | 'locations' | 'props'
-  | 'scenes' | 'board' | 'prompt' | 'export'
+  | 'scenes' | 'board' | 'prompt' | 'export' | 'profile'
 
 export interface Ctx {
   b: Bundle
@@ -32,6 +33,8 @@ export interface Ctx {
   setSceneId: (id: ID | null) => void
   setShotId: (id: ID | null) => void
   provider: string
+  /** Delete a film for good and move to the next one. */
+  deleteFilm: (id: ID) => Promise<void>
 }
 
 const NAV: { group: string; items: { id: ViewId; label: string }[] }[] = [
@@ -65,6 +68,7 @@ export default function App() {
   const [shotId, setShotId] = useState<ID | null>(null)
   const [save, setSave] = useState<SaveState>('idle')
   const [meta, setMeta] = useState<Meta | null>(null)
+  const [metaError, setMetaError] = useState('')
   const [settings, setSettings] = useState(false)
   const [palette, setPalette] = useState(false)
   const [newProject, setNewProject] = useState(false)
@@ -85,8 +89,10 @@ export default function App() {
       // stored session's token. Ask again now that it can be sent.
       if (m.mode === 'cloud' && !m.user && await accessToken()) m = await api.meta()
       setMeta(m)
-    } catch {
+      setMetaError('')
+    } catch (err) {
       setMeta(null)
+      setMetaError(err instanceof Error ? err.message : 'FRAME couldn’t reach its server.')
     }
   }, [])
   useEffect(() => { loadMeta() }, [loadMeta])
@@ -179,7 +185,18 @@ export default function App() {
     }
   }
 
-  const ctx: Ctx | null = b ? { b, refresh, go, sceneId, shotId, setSceneId, setShotId, provider: meta?.provider ?? '…' } : null
+  const deleteFilm = useCallback(async (id: ID) => {
+    await api.deleteProject(id)
+    const rest = (projects ?? []).filter((p) => p.id !== id)
+    setProjects(rest)
+    try { if (localStorage.getItem('frame.project') === id) localStorage.removeItem('frame.project') } catch { /* storage unavailable */ }
+    setProjectId(rest.find((p) => !p.is_demo)?.id ?? null)
+    setView('home')
+  }, [projects])
+
+  const ctx: Ctx | null = b
+    ? { b, refresh, go, sceneId, shotId, setSceneId, setShotId, provider: meta?.provider ?? '…', deleteFilm }
+    : null
 
   const crumbs = useMemo(() => {
     if (!b) return []
@@ -193,6 +210,14 @@ export default function App() {
     if (sh && (view === 'board' || view === 'prompt')) out.push(`Shot ${String(sh.number).padStart(2, '0')}`)
     return out
   }, [b, view, sceneId, shotId])
+
+  /* Without /api/meta nothing else can load — say so rather than spin. */
+  if (!meta && metaError) return (
+    <div className="landing"><div className="landing-inner">
+      <div className="warnline v-error"><span className="dot" />FRAME couldn’t reach its server: {metaError}</div>
+      <button className="primary" style={{ marginTop: 14 }} onClick={() => loadMeta()}>try again</button>
+    </div></div>
+  )
 
   /* Cloud deployments gate on sign-in; local development never does (§16). */
   if (needsSignIn) return <SignIn meta={meta} onSignedIn={loadMeta} />
@@ -223,8 +248,16 @@ export default function App() {
           <span><span className="k">prompts</span><span className="v">{counts.prompts}</span></span>
           <span><span className="k">ai</span><span className="v">{meta?.provider ?? '…'}</span></span>
         </div>
-        <button className="ghost" onClick={() => setPalette(true)}>⌘K</button>
+        <button className="ghost" title="Command palette — search and jump anywhere" onClick={() => setPalette(true)}>
+          {/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl+K'}
+        </button>
         <button className="ghost" onClick={() => setSettings(true)}>settings</button>
+        {meta?.user && (
+          <button className={`ghost who${view === 'profile' ? ' on' : ''}`} title={`Signed in as ${meta.user.email} — profile`}
+            onClick={() => go('profile')}>
+            {meta.user.email.split('@')[0]}
+          </button>
+        )}
         <div className={`savestate ${save}`}>
           {save === 'saving' ? 'saving…' : save === 'saved' ? 'saved' : save === 'error' ? 'error' : ''}
         </div>
@@ -265,7 +298,11 @@ export default function App() {
         </div>
 
         <div className="workspace">
-          {!ctx ? (
+          {view === 'profile' && meta?.user ? (
+            <ProfileView meta={meta} projects={projects}
+              onOpenFilm={(id) => { setProjectId(id); setView('home') }}
+              onNewFilm={openNewProject} />
+          ) : !ctx ? (
             <div className="block grow" style={{ display: 'grid', placeItems: 'center' }}>
               <div className="empty">
                 {projects === null ? 'loading…' : (

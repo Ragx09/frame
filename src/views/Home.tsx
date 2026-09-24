@@ -1,10 +1,26 @@
+import { useState } from 'react'
 import type { Ctx } from '../App'
 import { api } from '../lib/api'
-import { Field, SectionHead, Tag } from '../components/ui'
+import { Field, Modal, SectionHead, Tag } from '../components/ui'
 
 export function HomeView({ ctx }: { ctx: Ctx }) {
   const { b, refresh, go } = ctx
   const p = b.project
+  const [confirming, setConfirming] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+
+  const closeConfirm = () => { setConfirming(false); setTyped(''); setDeleteError('') }
+  const remove = async () => {
+    setDeleting(true); setDeleteError('')
+    try {
+      await ctx.deleteFilm(p.id)
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'FRAME couldn’t delete the film. Please try again.')
+      setDeleting(false)
+    }
+  }
 
   const done = (o: object | null, keys: string[]) =>
     !!o && keys.some((k) => String((o as Record<string, string>)[k] ?? '').trim())
@@ -26,6 +42,24 @@ export function HomeView({ ctx }: { ctx: Ctx }) {
 
   return (
     <div className="page">
+      {confirming && (
+        <Modal title="delete film" onClose={closeConfirm} footer={<>
+          <button onClick={closeConfirm}>cancel</button>
+          <button className="danger" disabled={deleting || typed.trim() !== p.name.trim()} onClick={remove}>
+            {deleting ? 'deleting…' : 'delete forever'}
+          </button>
+        </>}>
+          <div className="tiny" style={{ lineHeight: 1.8, marginBottom: 12 }}>
+            This permanently deletes <span className="bright">{p.name}</span> and everything in it. Type the film’s
+            title to confirm.
+          </div>
+          <div className="field">
+            <input autoFocus value={typed} placeholder={p.name} onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && typed.trim() === p.name.trim() && !deleting) remove() }} />
+          </div>
+          {deleteError && <div className="warnline v-error"><span className="dot" />{deleteError}</div>}
+        </Modal>
+      )}
       <div className="home">
         <div>
           <div className="label" style={{ marginBottom: 8 }}>{p.status}</div>
@@ -69,6 +103,16 @@ export function HomeView({ ctx }: { ctx: Ctx }) {
           <Field label="title" value={p.name} onCommit={async (v) => { await api.patchProject(p.id, { name: v }); await refresh() }} />
           <Field label="format" value={p.format} onCommit={async (v) => { await api.patchProject(p.id, { format: v }); await refresh() }} />
           <Field label="status" value={p.status} onCommit={async (v) => { await api.patchProject(p.id, { status: v }); await refresh() }} />
+
+          {!p.is_demo && (
+            <>
+              <SectionHead title="danger_zone" />
+              <div className="tiny dim" style={{ marginBottom: 10 }}>
+                Deleting a film removes its story, script, world, scenes, shots and prompts. This can’t be undone.
+              </div>
+              <button className="danger" onClick={() => setConfirming(true)}>delete this film</button>
+            </>
+          )}
         </div>
 
         <div>
